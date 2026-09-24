@@ -1,0 +1,209 @@
+// 1. Guard clause: Only proceed if the pathname includes "-de-cookies"
+if (window.location.pathname.includes("cookies")) {
+
+  // 2. Poll every 100ms until both Termly and siteDetails are available on the window object
+  const checkConditions = setInterval(() => {
+    if (window.TERMLY_RESOURCE_BLOCKER_LOADED && window.siteDetails) {
+      clearInterval(checkConditions); // Stop polling and execute immediately
+
+      // 3. Find the h1.headline containing "DE COOKIES"
+      const headline = Array.from(document.querySelectorAll('h1'))
+        .find(el => el.textContent.trim().toUpperCase().includes("DE COOKIES"));
+
+      if (!headline) {
+        console.error('Headline "DE COOKIES" not found');
+        return;
+      }
+
+      // 4. Find the .container element above the headline
+      const targetContainer = headline.closest('.container');
+      if (!targetContainer) {
+        console.error('No .container found above the headline');
+        return;
+      }
+
+      // 5. Hide the original container and its content
+      targetContainer.style.display = 'none';
+
+      // 6. Create a new container for the Termly policy, add class, and insert it right after the hidden container
+      const container = document.createElement('div');
+      container.id = 'policy-container';
+      container.classList.add('container-fixed'); // Added container-fixed class
+      targetContainer.parentNode.insertBefore(container, targetContainer.nextSibling);
+
+      // 6b. The localized "Manage Cookie Preferences" link is added inside
+      // #policy-container by each render path (see addManagePreferencesLink).
+
+      // Hardcoded policy type
+      const policyType = 'Cookie Policy';
+
+      // Derive the website UUID from the already-loaded Termly script tag
+      function getTermlyWebsiteUuid() {
+        const termlyScript = document.querySelector('script[src*="autoBlock=on"]');
+        if (!termlyScript) return null;
+        try {
+          const termlyUrl = new URL(termlyScript.src);
+          const parts = termlyUrl.pathname.split('/');
+          return parts[2] || null;
+        } catch (e) {
+          return null;
+        }
+      }
+
+      // --- NEW: Localized, accessible "Manage Cookie Preferences" link ---------
+
+      // Detect the preferred language from the browser, falling back to Spanish.
+      // Only the base language (e.g. "en" from "en-US") is used to pick the label,
+      // but the full tag is kept so we can distinguish pt-BR from pt-PT.
+      function detectLanguage() {
+        const supported = ['en', 'es', 'de', 'pt', 'fr', 'it'];
+        const candidates = (navigator.languages && navigator.languages.length)
+          ? navigator.languages
+          : [navigator.language || navigator.userLanguage || ''];
+
+        for (const raw of candidates) {
+          const full = String(raw).toLowerCase();
+          const base = full.split('-')[0];
+          if (supported.includes(base)) {
+            return { base, full };
+          }
+        }
+        return { base: 'es', full: 'es' }; // Default: Spanish
+      }
+
+      // Translations for the visible text + aria-label.
+      function getPreferencesLabel() {
+        const { base, full } = detectLanguage();
+        const labels = {
+          en: 'Manage Cookie Preferences',
+          es: 'Administrar preferencias de cookies',
+          de: 'Cookie-Einstellungen verwalten',
+          fr: 'Gérer les préférences de cookies',
+          it: 'Gestisci le preferenze dei cookie',
+          // Brazilian vs. European Portuguese differ on this verb.
+          pt: full === 'pt-br'
+            ? 'Gerenciar preferências de cookies'
+            : 'Gerir preferências de cookies'
+        };
+        return { text: labels[base] || labels.es, lang: base };
+      }
+
+      function addManagePreferencesLink() {
+        // Guard against duplicate insertion if the script runs more than once.
+        if (document.getElementById('manage-cookie-preferences-wrap')) return;
+
+        const { text, lang } = getPreferencesLabel();
+
+        const wrap = document.createElement('div');
+        wrap.id = 'manage-cookie-preferences-wrap';
+        wrap.style.marginBottom = '1.5rem';
+
+        const link = document.createElement('a');
+        link.id = 'manage-cookie-preferences';
+        link.href = '#';
+        link.textContent = text;
+
+        // Accessibility
+        link.setAttribute('aria-label', text); // matches visible text -> voice-control safe
+        link.setAttribute('lang', lang);        // helps screen readers pronounce correctly
+        // Native <a href> is already keyboard-focusable and Enter-activatable.
+
+        // Termly auto-wires elements with this class; kept as a fallback path.
+        link.classList.add('termly-display-preferences');
+
+        // Inherit typography/colour from the surrounding content (the element above it),
+        // then add the minimal link affordances so it still reads as clickable.
+        link.style.font = 'inherit';
+        link.style.color = 'inherit';
+        link.style.textDecoration = 'underline';
+        link.style.cursor = 'pointer';
+        link.style.display = 'inline-block';
+        link.style.padding = '0 20px'
+        // NOTE: focus outline is intentionally NOT removed, so keyboard users keep a visible focus ring.
+
+        link.addEventListener('click', function (e) {
+          e.preventDefault();
+          if (typeof window.displayPreferenceModal === 'function') {
+            window.displayPreferenceModal(); // Opens the Termly consent manager
+          } else {
+            console.warn('Termly displayPreferenceModal() is not available yet.');
+          }
+        });
+
+        wrap.appendChild(link);
+
+        // Prepend inside #policy-container so it sits at the top of the policy
+        // block and inherits styles from the container it lives in.
+        container.insertBefore(wrap, container.firstChild);
+      }
+
+      // -------------------------------------------------------------------------
+
+      function renderPolicy(policyId) {
+        container.innerHTML = '';
+
+        const embed = document.createElement('div');
+        embed.setAttribute('name', 'termly-embed');
+        embed.setAttribute('data-id', policyId);
+        container.appendChild(embed);
+
+        // Remove existing script if present so it re-initialises
+        const existing = document.getElementById('termly-jssdk');
+        if (existing) existing.remove();
+
+        const script = document.createElement('script');
+        script.id = 'termly-jssdk';
+        script.src = 'https://app.termly.io/embed-policy.min.js';
+        container.appendChild(script);
+
+        addManagePreferencesLink();
+      }
+
+      function showError(msg) {
+        container.innerHTML = '<div class="policy-error">' + msg + '</div>';
+        addManagePreferencesLink();
+      }
+
+      function showDummyPolicy() {
+        container.innerHTML = `
+          <div class="dummy-policy-notice">
+            <span class="dummy-policy-notice-icon">⚠️</span>
+            <span>Preview mode — Termly script not detected. Showing sample policy layout.</span>
+          </div>
+          <div class="dummy-policy">
+            <h1>Cookie Policy</h1>
+            <p class="dummy-policy-date">Last updated: March 12, 2026</p>
+            <p>This Cookie Policy explains how we use cookies and similar technologies to recognize you when you visit our website...</p>
+          </div>
+        `;
+        addManagePreferencesLink();
+      }
+
+      const websiteUuid = getTermlyWebsiteUuid();
+
+      if (!websiteUuid) {
+        showDummyPolicy();
+        return;
+      }
+
+      // Fetch policy UUIDs dynamically from the Termly API
+      fetch('https://app.termly.io/api/v1/snippets/websites/' + websiteUuid + '/policies')
+        .then(function(response) {
+          if (!response.ok) throw new Error('Failed to fetch policies (HTTP ' + response.status + ')');
+          return response.json();
+        })
+        .then(function(policies) {
+          const policyId = policies[policyType];
+          if (!policyId) {
+            showError('Policy "' + policyType + '" was not found for this Termly account.');
+            return;
+          }
+          renderPolicy(policyId);
+        })
+        .catch(function(err) {
+          console.error('Termly policy fetch error:', err);
+          showError('Could not load policy. Please check your Termly account configuration to ensure it has this policy published.');
+        });
+    }
+  }, 100);
+}
